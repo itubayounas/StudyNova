@@ -1,12 +1,13 @@
 import {
-  View, Text, TextInput, TouchableOpacity,
-  ScrollView, KeyboardAvoidingView, Platform, Animated,
+  View, Text, TextInput, TouchableOpacity, ScrollView,
+  KeyboardAvoidingView, Platform, Animated, Alert,
 } from "react-native";
 import { useState, useRef, useEffect } from "react";
-import { Ionicons } from "@expo/vector-icons";
-import { LinearGradient } from "expo-linear-gradient";
+import { Ionicons }          from "@expo/vector-icons";
+import { LinearGradient }    from "expo-linear-gradient";
+import { useDocument }       from "../context/DocumentContext";
+import { chatWithDocument }  from "../services/groqService";
 
-// Three dots that bounce while AI is thinking
 const TypingDots = () => {
   const d1 = useRef(new Animated.Value(0)).current;
   const d2 = useRef(new Animated.Value(0)).current;
@@ -17,7 +18,7 @@ const TypingDots = () => {
       Animated.loop(Animated.sequence([
         Animated.delay(i * 160),
         Animated.timing(d, { toValue: -5, duration: 280, useNativeDriver: true }),
-        Animated.timing(d, { toValue: 0, duration: 280, useNativeDriver: true }),
+        Animated.timing(d, { toValue: 0,  duration: 280, useNativeDriver: true }),
         Animated.delay(500),
       ])).start();
     });
@@ -35,15 +36,14 @@ const TypingDots = () => {
   );
 };
 
-// Each chat bubble fades + slides in
 const Bubble = ({ msg }) => {
-  const fade = useRef(new Animated.Value(0)).current;
+  const fade  = useRef(new Animated.Value(0)).current;
   const slide = useRef(new Animated.Value(12)).current;
   const isUser = msg.role === "user";
 
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(fade, { toValue: 1, duration: 300, useNativeDriver: true }),
+      Animated.timing(fade,  { toValue: 1, duration: 300, useNativeDriver: true }),
       Animated.timing(slide, { toValue: 0, duration: 300, useNativeDriver: true }),
     ]).start();
   }, []);
@@ -52,9 +52,8 @@ const Bubble = ({ msg }) => {
     <Animated.View style={{
       opacity: fade, transform: [{ translateY: slide }],
       alignSelf: isUser ? "flex-end" : "flex-start",
-      maxWidth: "80%", marginBottom: 14,
+      maxWidth: "82%", marginBottom: 14,
     }}>
-      {/* AI sender label */}
       {!isUser && (
         <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginBottom: 5 }}>
           <View style={{
@@ -63,7 +62,7 @@ const Bubble = ({ msg }) => {
           }}>
             <Ionicons name="sparkles" size={11} color="#fff" />
           </View>
-          <Text style={{ color: "#6b7280", fontSize: 11, fontWeight: "600" }}>StudyAI</Text>
+          <Text style={{ color: "#6b7280", fontSize: 11, fontWeight: "600" }}>StudyNova AI</Text>
         </View>
       )}
 
@@ -88,31 +87,86 @@ const Bubble = ({ msg }) => {
 };
 
 export default function ChatScreen() {
-  const [messages, setMessages] = useState([
-    { id: 1, role: "assistant", text: "Hey! Save your notes in the Upload tab and I will answer any question about them." },
-  ]);
-  const [input, setInput] = useState("");
-  const [loading, setLoading] = useState(false);
+  const { documentText, hasDocument, fileName } = useDocument();
+
+  const [messages,  setMessages]  = useState([]);
+  const [input,     setInput]     = useState("");
+  const [loading,   setLoading]   = useState(false);
   const scrollRef = useRef(null);
 
-  const send = () => {
-    if (!input.trim()) return;
-    const userMsg = { id: Date.now(), role: "user", text: input };
-    setMessages((p) => [...p, userMsg]);
-    setInput("");
-    setLoading(true);
-    setTimeout(() => {
-      setMessages((p) => [...p, {
-        id: Date.now() + 1, role: "assistant",
-        text: "Grok AI connects in Step 5. You asked: " + userMsg.text,
-      }]);
-      setLoading(false);
-    }, 1200);
-  };
+  // Set welcome message based on whether a document is loaded
+  useEffect(() => {
+    setMessages([{
+      id:   1,
+      role: "assistant",
+      text: hasDocument
+        ? `Hey! I've read your document "${fileName}". Ask me anything about it — I can summarize, explain, or quiz you!`
+        : "Hey! Go to the Upload tab and save your study material first. Then come back and ask me anything about it.",
+    }]);
+  }, [hasDocument, fileName]);
 
   useEffect(() => {
     setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
   }, [messages, loading]);
+
+  async function send() {
+    if (!input.trim()) return;
+
+    if (!hasDocument) {
+      Alert.alert(
+        "No document loaded",
+        "Please go to the Upload tab, paste or upload your study material, then come back."
+      );
+      return;
+    }
+
+    const userMsg = { id: Date.now(), role: "user", text: input.trim() };
+
+    // Build history for context (role + content format Groq expects)
+    const history = messages
+      .filter((m) => m.id !== 1)  // skip welcome message
+      .map((m) => ({
+        role:    m.role === "user" ? "user" : "assistant",
+        content: m.text,
+      }));
+
+    setMessages((p) => [...p, userMsg]);
+    setInput("");
+    setLoading(true);
+
+    try {
+      const reply = await chatWithDocument(
+        documentText,
+        userMsg.text,
+        history
+      );
+
+      setMessages((p) => [...p, {
+        id:   Date.now() + 1,
+        role: "assistant",
+        text: reply,
+      }]);
+    } catch (err) {
+      setMessages((p) => [...p, {
+        id:   Date.now() + 1,
+        role: "assistant",
+        text: "Sorry, something went wrong. Please try again.",
+      }]);
+      Alert.alert("Error", err.message);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  function clearChat() {
+    setMessages([{
+      id:   Date.now(),
+      role: "assistant",
+      text: hasDocument
+        ? `Chat cleared. Still reading "${fileName}" — ask me anything!`
+        : "Chat cleared. Upload a document to get started.",
+    }]);
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: "#1a1d2e" }}>
@@ -133,14 +187,19 @@ export default function ChatScreen() {
         <View style={{ flex: 1 }}>
           <Text style={{ color: "#eef2ff", fontSize: 15, fontWeight: "700" }}>AI Tutor</Text>
           <View style={{ flexDirection: "row", alignItems: "center", gap: 5, marginTop: 1 }}>
-            <View style={{ width: 6, height: 6, borderRadius: 3, backgroundColor: "#22c55e" }} />
-            <Text style={{ color: "#6b7280", fontSize: 11 }}>Online · Powered by Grok</Text>
+            <View style={{
+              width: 6, height: 6, borderRadius: 3,
+              backgroundColor: hasDocument ? "#22c55e" : "#f59e0b",
+            }} />
+            <Text style={{ color: "#6b7280", fontSize: 11 }}>
+              {hasDocument ? `Reading: ${fileName}` : "No document loaded"}
+            </Text>
           </View>
         </View>
-        <TouchableOpacity style={{
-          backgroundColor: "#1e1b4b", borderRadius: 8,
-          paddingHorizontal: 10, paddingVertical: 5,
-        }}>
+        <TouchableOpacity
+          onPress={clearChat}
+          style={{ backgroundColor: "#1e1b4b", borderRadius: 8, paddingHorizontal: 10, paddingVertical: 5 }}
+        >
           <Text style={{ color: "#818cf8", fontSize: 12, fontWeight: "600" }}>Clear</Text>
         </TouchableOpacity>
       </View>
@@ -156,25 +215,31 @@ export default function ChatScreen() {
           showsVerticalScrollIndicator={false}
         >
           {/* Suggested questions */}
-          <View style={{ marginBottom: 16 }}>
-            <Text style={{ color: "#4b5563", fontSize: 11, fontWeight: "600", letterSpacing: 1, marginBottom: 8 }}>
-              TRY ASKING
-            </Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-              {["Summarize my notes", "What are the key points?", "Make it simpler"].map((q) => (
-                <TouchableOpacity
-                  key={q}
-                  onPress={() => setInput(q)}
-                  style={{
-                    backgroundColor: "#242840", borderWidth: 1, borderColor: "#2e3354",
-                    borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, marginRight: 8,
-                  }}
-                >
-                  <Text style={{ color: "#818cf8", fontSize: 12 }}>{q}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
+          {hasDocument && (
+            <View style={{ marginBottom: 16 }}>
+              <Text style={{ color: "#4b5563", fontSize: 11, fontWeight: "600", letterSpacing: 1, marginBottom: 8 }}>
+                TRY ASKING
+              </Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                {[
+                  "Summarize this document",
+                  "What are the key points?",
+                  "Explain the main concept",
+                  "What should I focus on?",
+                ].map((q) => (
+                  <TouchableOpacity
+                    key={q} onPress={() => setInput(q)}
+                    style={{
+                      backgroundColor: "#242840", borderWidth: 1, borderColor: "#2e3354",
+                      borderRadius: 20, paddingHorizontal: 14, paddingVertical: 7, marginRight: 8,
+                    }}
+                  >
+                    <Text style={{ color: "#818cf8", fontSize: 12 }}>{q}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+          )}
 
           {messages.map((m) => <Bubble key={m.id} msg={m} />)}
 
@@ -203,19 +268,25 @@ export default function ChatScreen() {
           }}>
             <TextInput
               style={{ color: "#e0e7ff", fontSize: 14, maxHeight: 90 }}
-              placeholder="Ask anything about your notes..."
+              placeholder={hasDocument ? "Ask anything about your document..." : "Upload a document first..."}
               placeholderTextColor="#374151"
               value={input}
               onChangeText={setInput}
               multiline
+              onSubmitEditing={send}
             />
           </View>
-          <TouchableOpacity onPress={send} activeOpacity={0.85} style={{ borderRadius: 16, overflow: "hidden" }}>
+          <TouchableOpacity
+            onPress={send}
+            disabled={loading || !input.trim()}
+            activeOpacity={0.85}
+            style={{ borderRadius: 16, overflow: "hidden" }}
+          >
             <LinearGradient
-              colors={input ? ["#6366f1", "#4f46e5"] : ["#242840", "#242840"]}
+              colors={input.trim() ? ["#6366f1", "#4f46e5"] : ["#242840", "#242840"]}
               style={{ width: 44, height: 44, alignItems: "center", justifyContent: "center" }}
             >
-              <Ionicons name="send" size={17} color={input ? "#fff" : "#4b5563"} />
+              <Ionicons name="send" size={17} color={input.trim() ? "#fff" : "#4b5563"} />
             </LinearGradient>
           </TouchableOpacity>
         </View>

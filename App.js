@@ -5,21 +5,25 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { StatusBar } from "expo-status-bar";
 import { View, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+// ✅ ADD THESE TWO IMPORTS
+import { SafeAreaProvider, useSafeAreaInsets } from "react-native-safe-area-context";
 
 import { AuthProvider, useAuth } from "./context/AuthContext";
-
 import LoginScreen     from "./screens/LoginScreen";
 import RegisterScreen  from "./screens/RegisterScreen";
 import UploadScreen    from "./screens/UploadScreen";
 import ChatScreen      from "./screens/ChatScreen";
 import QuizScreen      from "./screens/QuizScreen";
 import FlashcardScreen from "./screens/FlashcardScreen";
+import { DocumentProvider } from "./context/DocumentContext";
 
 const Tab   = createBottomTabNavigator();
 const Stack = createNativeStackNavigator();
 
-// ─── Main tabs (only shown when user is logged in) ──────────────
+// ✅ Separate component so useSafeAreaInsets() works inside SafeAreaProvider
 function MainTabs() {
+  const insets = useSafeAreaInsets(); // ← reads Android bottom nav height
+
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -28,8 +32,10 @@ function MainTabs() {
         tabBarStyle: {
           backgroundColor: "#0f172a",
           borderTopColor:  "#1e293b",
-          paddingBottom:   5,
-          height:          60,
+          // ✅ FIXED: paddingBottom now respects Android gesture nav / button bar
+          paddingBottom:   Math.max(insets.bottom, 8),
+          paddingTop:      8,
+          height:          60 + Math.max(insets.bottom, 0), // expands for inset
         },
         tabBarActiveTintColor:   "#6366f1",
         tabBarInactiveTintColor: "#64748b",
@@ -52,19 +58,14 @@ function MainTabs() {
   );
 }
 
-// ─── Root navigator — switches based on auth state ──────────────
 function RootNavigator() {
   const { user, loading } = useAuth();
 
-  // Firebase is checking AsyncStorage for a saved session
-  // Show a spinner so the app does not flash the login screen
   if (loading) {
     return (
       <View style={{
-        flex: 1,
-        backgroundColor: "#1a1d2e",
-        justifyContent: "center",
-        alignItems: "center",
+        flex: 1, backgroundColor: "#1a1d2e",
+        justifyContent: "center", alignItems: "center",
       }}>
         <ActivityIndicator size="large" color="#6366f1" />
       </View>
@@ -74,10 +75,8 @@ function RootNavigator() {
   return (
     <Stack.Navigator screenOptions={{ headerShown: false, animation: "fade" }}>
       {user ? (
-        // ✅ Logged in → show the main tab screen
         <Stack.Screen name="Main" component={MainTabs} />
       ) : (
-        // ❌ Not logged in → show auth screens
         <>
           <Stack.Screen name="Login"    component={LoginScreen} />
           <Stack.Screen name="Register" component={RegisterScreen} />
@@ -87,14 +86,18 @@ function RootNavigator() {
   );
 }
 
-// ─── App root ───────────────────────────────────────────────────
 export default function App() {
   return (
-    <AuthProvider>
-      <NavigationContainer>
-        <StatusBar style="light" />
-        <RootNavigator />
-      </NavigationContainer>
-    </AuthProvider>
+    // ✅ SafeAreaProvider must wrap everything
+    <SafeAreaProvider>
+      <DocumentProvider>
+        <AuthProvider>
+          <NavigationContainer>
+            <StatusBar style="light" />
+            <RootNavigator />
+          </NavigationContainer>
+        </AuthProvider>
+      </DocumentProvider>
+    </SafeAreaProvider>
   );
 }
